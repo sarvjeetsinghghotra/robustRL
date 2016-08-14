@@ -79,6 +79,7 @@ def train_agent(job_id,
         _slp = float(max_traj-min_traj); _slp = _slp/rwd_switch
         N = (min_traj if curr_return > rwd_switch \
             else min_traj + (rwd_switch-curr_return)*_slp )
+
         return int(np.ceil(N))
 
     # =======================================================================
@@ -102,7 +103,7 @@ def train_agent(job_id,
             idx=iter, normalized_env=normalized_env)
 
         if evaluate_test:
-            test_curve[iter] = policy_evaluation(policy, 'test', num_episodes=10)
+            test_curve[iter] = policy_evaluation_parallel(policy, 'test', num_episodes=10)
 
         # save interim results
         if save_interim == True and iter % save_freq == 0 and iter > 0:

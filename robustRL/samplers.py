@@ -198,10 +198,12 @@ def policy_evaluation(policy,
     num_episodes=10,
     horizon=1e6,
     visual=False,
-    gamma=1):
-    # TODO: Add functionality to sample parallel paths and evaluate policy
+    gamma=1,
+    param=None,
+    num_cpu=1):
 
-    env = get_environment(env_mode)
+
+    env = get_environment(env_mode, param=param)
     horizon = min(env.horizon, horizon)
 
     ep_returns = np.zeros(num_episodes)
@@ -217,10 +219,80 @@ def policy_evaluation(policy,
             o, r, done, _ = env.step(a)
             ep_returns[ep] += (gamma ** t) * r
             t += 1
+    
+    if num_cpu == 1:
+        mean_eval = np.mean(ep_returns)
+        std_eval  = np.std(ep_returns)
+        min_eval  = np.amin(ep_returns)
+        max_eval  = np.amax(ep_returns)
+        return (mean_eval, std_eval, min_eval, max_eval, num_episodes)
+    else:
+        return (ep_returns, num_episodes)
 
+def _policy_evaluation_star(args_list):
+    return policy_evaluation(*args_list)
+
+# Functions for performance policy evaluation in parallel
+
+def policy_evaluation_parallel(policy, 
+    env_mode='train',
+    num_episodes=10,
+    horizon=1e6,
+    visual=False,
+    gamma=1,
+    param=None,
+    num_cpu=None,
+    max_process_time=60,
+    max_timeouts=5):
+    
+    if num_cpu == None or num_cpu == 'max':
+        num_cpu = mp.cpu_count()
+    elif num_cpu == 1:
+        return policy_evaluation(policy, env_mode=env_mode, num_episodes=num_episodes)
+    else:
+        num_cpu = min(mp.cpu_count(), num_cpu)
+    
+    num_episodes_per_cpu = int(np.ceil(num_episodes/num_cpu))
+    args_list = [policy, env_mode, num_episodes_per_cpu, horizon, visual, gamma, param, num_cpu]
+    
+    results = _try_multiprocess_policy_evaluation(args_list, num_cpu, 
+                                    max_process_time, max_timeouts)
+    
+    #can be made faster by usinf np.zeros
+    ep_returns = []
+    num_episodes = 0
+    for result in results:
+        num_episodes += result[-1]
+        for rew in result[0]:
+            ep_returns.append(rew)
+    
     mean_eval = np.mean(ep_returns)
     std_eval  = np.std(ep_returns)
     min_eval  = np.amin(ep_returns)
     max_eval  = np.amax(ep_returns)
-
+    
     return (mean_eval, std_eval, min_eval, max_eval, num_episodes)
+    
+def _try_multiprocess_policy_evaluation(args_list, num_cpu, max_process_time,
+                                        max_timeouts):
+    # Base case
+    if max_timeouts == 0: 
+        return None
+    
+    pool = mp.Pool(processes=num_cpu, maxtasksperchild=1)
+    parallel_runs = [pool.apply_async(_policy_evaluation_star, args=(args_list,)) for _ in range(num_cpu)]
+
+    try:
+        results = [p.get(timeout=max_process_time) for p in parallel_runs]
+    except Exception as e:
+        print str(e)
+        print "Timeout Error raised... Trying again"
+        pool.close()
+        pool.terminate()
+        pool.join()        
+        return  _try_multiprocess_policy_evaluation(args_list, num_cpu, max_process_time, max_timeouts-1)
+
+    pool.close()
+    pool.terminate()
+    pool.join()  
+    return results
